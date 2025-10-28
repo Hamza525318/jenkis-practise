@@ -2,19 +2,13 @@ pipeline {
   agent any
 
   environment {
-    DOCKERHUB_CRED = 'dockerhub'
-    DOCKER_USER    = credentials('dockerhub').username
-    DOCKER_PSW     = credentials('dockerhub').password
-    IMAGE          = "${DOCKER_USER}/jx-node-api"
-    TAG            = "${env.BRANCH_NAME == 'main' ? env.BUILD_NUMBER : env.BRANCH_NAME.replaceAll('/','-') + '-' + env.BUILD_NUMBER}"
-    // Cache dir for npm on Jenkins agent
-    NPM_CONFIG_CACHE = "${WORKSPACE}/.npm"
+    IMAGE = "jx-node-api"
   }
 
   options {
     timestamps()
-    ansiColor('xterm')
     buildDiscarder(logRotator(numToKeepStr: '20'))
+    ansiColor('xterm')
   }
 
   stages {
@@ -22,8 +16,13 @@ pipeline {
       steps { checkout scm }
     }
 
-    stage('Use Node inside Docker') {
-      agent { docker { image 'node:20-alpine' args "-v ${env.WORKSPACE}:${env.WORKSPACE}" } }
+    stage('Build & Test inside Node') {
+      agent {
+        docker {
+          image 'node:20-alpine'
+          args "-v ${env.WORKSPACE}:${env.WORKSPACE}"
+        }
+      }
       stages {
         stage('Install') {
           steps {
@@ -44,33 +43,32 @@ pipeline {
             }
           }
         }
-        stage('Build app (no-op in this demo)') {
-          steps { sh 'echo "Build step placeholder (TS transpile, webpack, etc.)"' }
-        }
       }
     }
 
     stage('Docker Build & Push') {
       steps {
-        sh 'echo "$DOCKER_PSW" | docker login -u "$DOCKER_USER" --password-stdin'
-        sh 'docker build -t "$IMAGE:$TAG" .'
-        sh 'docker tag "$IMAGE:$TAG" "$IMAGE:latest"'
-        sh 'docker push "$IMAGE:$TAG"'
-        sh 'docker push "$IMAGE:latest"'
+        withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PSW')]) {
+          sh 'echo "$DOCKER_PSW" | docker login -u "$DOCKER_USER" --password-stdin'
+          sh 'docker build -t "$DOCKER_USER/${IMAGE}:$BUILD_NUMBER" .'
+          sh 'docker tag "$DOCKER_USER/${IMAGE}:$BUILD_NUMBER" "$DOCKER_USER/${IMAGE}:latest"'
+          sh 'docker push "$DOCKER_USER/${IMAGE}:$BUILD_NUMBER"'
+          sh 'docker push "$DOCKER_USER/${IMAGE}:latest"'
+        }
       }
     }
 
-    stage('Deploy (docker compose)') {
+    stage('Deploy') {
       steps {
-        writeFile file: 'deploy.env', text: "DOCKER_USER=${env.DOCKER_USER}\nTAG=${env.TAG}\n"
-        sh 'set -a && . ./deploy.env && docker compose up -d --pull always'
+        sh 'docker compose down || true'
+        sh 'docker compose up -d'
       }
     }
   }
 
   post {
     success {
-      echo "Deployed http://localhost:8081/health"
+      echo "Deployed successfully → http://localhost:8081"
     }
     cleanup {
       sh 'docker logout || true'
