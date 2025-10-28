@@ -1,0 +1,6 @@
+services:
+  api:
+    image: ${DOCKER_USER}/jx-node-api:${TAG-latest}
+    ports:
+      - "8081:3000"
+    restart: unless-stopped
